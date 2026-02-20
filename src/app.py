@@ -1,15 +1,22 @@
 """
 This module takes care of starting the API Server, Loading the DB and Adding the endpoints
 """
+from flask_cors import CORS
 import os
 from flask import Flask, request, jsonify, url_for, send_from_directory
 from flask_migrate import Migrate
+from api.models import db, User
 from flask_swagger import swagger
 from api.utils import APIException, generate_sitemap
 from api.models import db
 from api.routes import api
 from api.admin import setup_admin
 from api.commands import setup_commands
+from flask_jwt_extended import create_access_token
+from flask_jwt_extended import get_jwt_identity
+from flask_jwt_extended import jwt_required
+from flask_jwt_extended import JWTManager
+
 
 # from models import Person
 
@@ -18,6 +25,11 @@ static_file_dir = os.path.join(os.path.dirname(
     os.path.realpath(__file__)), '../dist/')
 app = Flask(__name__)
 app.url_map.strict_slashes = False
+
+CORS(app)
+
+app.config["JWT_SECRET_KEY"] = "super-secret"
+jwt = JWTManager(app)
 
 # database condiguration
 db_url = os.getenv("DATABASE_URL")
@@ -50,6 +62,52 @@ def handle_invalid_usage(error):
 # generate sitemap with all your endpoints
 
 
+@app.route('/api/signup', methods=['POST'])
+def signup():
+    body = request.get_json()
+    email = body.get("email")
+    password = body.get("password")
+
+    if not email or not password:
+        return jsonify({"msg": "Email y contraseña requeridos"}), 400
+
+
+    user_exist = User.query.filter_by(email=email).first()
+    if user_exist:
+        return jsonify({"msg": "El usuario ya existe"}), 400
+
+
+    new_user = User(email=email, password=password, is_active=True)
+    db.session.add(new_user)
+    db.session.commit()
+
+    return jsonify({"msg": "Usuario creado con éxito"}), 201
+
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    email = request.json.get("email", None)
+    password = request.json.get("password", None)
+
+    user = User.query.filter_by(email=email).first()
+
+
+    if user is None or user.password != password:
+        return jsonify({"msg": "Email o contraseña incorrectos"}), 401
+
+
+    access_token = create_access_token(identity=email)
+    return jsonify(access_token=access_token)
+
+
+@app.route('/api/private', methods=['GET'])
+@jwt_required()
+def private():
+
+    current_user_email = get_jwt_identity()
+    return jsonify({"logged_in_as": current_user_email, "msg": "Bienvenido a tu área privada"}), 200
+
+
 @app.route('/')
 def sitemap():
     if ENV == "development":
@@ -57,6 +115,8 @@ def sitemap():
     return send_from_directory(static_file_dir, 'index.html')
 
 # any other endpoint will try to serve it like a static file
+
+
 @app.route('/<path:path>', methods=['GET'])
 def serve_any_other_file(path):
     if not os.path.isfile(os.path.join(static_file_dir, path)):
